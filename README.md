@@ -1,8 +1,8 @@
 # Fantasy — servidor MCP de ESPN Fantasy Football
 
 Servidor [MCP](https://modelcontextprotocol.io) para que Claude consulte y analice tu liga de
-ESPN Fantasy Football (NFL). Usa la API web (no oficial) de ESPN y es **de solo lectura**:
-Claude te dice qué cambios hacer y tú los aplicas en la app de ESPN.
+ESPN Fantasy Football (NFL). Usa la API web (no oficial) de ESPN. Además de consultar, puede
+cambiar la alineación y fichar/soltar jugadores de **tu** equipo (nunca de otros).
 
 ## Herramientas
 
@@ -16,13 +16,21 @@ Claude te dice qué cambios hacer y tú los aplicas en la app de ESPN.
 | `get_free_agents` | Mejores agentes libres / waivers por posición |
 | `find_player` | Dónde está un jugador (qué equipo o si está libre) |
 | `get_recent_transactions` | Fichajes, waivers y traspasos de la semana |
+| `set_lineup` ✏️ | Cambia tu alineación (movimientos concretos o la óptima de `suggest_lineup`) |
+| `add_drop` ✏️ | Ficha un agente libre o reclama un waiver y, opcionalmente, suelta a un jugador |
+
+Las herramientas ✏️ necesitan `ESPN_S2` y `ESPN_SWID` (aunque la liga sea pública). Sin
+`confirm=true` solo devuelven una vista previa; Claude debe enseñártela y esperar tu permiso antes
+de enviar el cambio. ESPN rechaza mover a jugadores cuyo partido ya ha empezado.
 
 ## Configuración
 
 1. **ID de la liga**: abre tu liga en fantasy.espn.com; es el número de `leagueId=` en la URL.
 2. **Cookies (solo ligas privadas)**: con la sesión iniciada en espn.com abre las herramientas de
    desarrollador del navegador → *Application/Almacenamiento* → *Cookies* → `https://www.espn.com`
-   y copia los valores de `espn_s2` y `SWID`. Son credenciales de tu cuenta: no las subas al repo.
+   y copia los valores de `espn_s2` y `SWID`. Hacen falta para ligas privadas y para hacer cambios.
+   Son credenciales de tu cuenta: guárdalas solo en variables de entorno o en `.env` (ignorado por
+   git), nunca en archivos del repo.
 3. Exporta las variables (ver `.env.example`):
 
    ```bash

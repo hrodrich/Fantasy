@@ -1,6 +1,8 @@
-"""Cliente de solo lectura para la API (no oficial) de ESPN Fantasy Football.
+"""Cliente para la API (no oficial) de ESPN Fantasy Football.
 
-Las funciones ``parse_*`` y ``optimal_lineup`` son puras (trabajan sobre el JSON
+Lee datos de la liga y, con las cookies de sesión, envía cambios de alineación y
+fichajes de tu equipo. Las funciones ``parse_*``, ``optimal_lineup`` y
+``plan_lineup`` son puras (trabajan sobre el JSON
 que devuelve ESPN) para poder probarlas sin red.
 """
 
@@ -16,6 +18,7 @@ import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .constants import (
+    BENCH_SLOT,
     IR_SLOT,
     NON_STARTING_SLOTS,
     POSITIONS,
@@ -27,6 +30,7 @@ from .constants import (
 )
 
 BASE_URL = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl"
+WRITE_URL = "https://lm-api-writes.fantasy.espn.com/apis/v3/games/ffl"
 
 
 class EspnError(ToolError):
@@ -179,6 +183,7 @@ def optimal_lineup(roster: list[dict], slot_counts: dict[int, int]) -> dict:
         return sum(1 for p in pool if slot in p.get("_eligible_slot_ids", []))
 
     used: set = set()
+    assignment: dict[int, int] = {}
     starters = []
     for slot in sorted(slot_counts, key=lambda s: (flexibility(s), s)):
         for _ in range(slot_counts[slot]):
@@ -191,6 +196,7 @@ def optimal_lineup(roster: list[dict], slot_counts: dict[int, int]) -> dict:
                 starters.append({"slot": SLOTS.get(slot, str(slot)), "player": None})
                 continue
             used.add(best["id"])
+            assignment[best["id"]] = slot
             starters.append({
                 "slot": SLOTS.get(slot, str(slot)),
                 "player": best["name"],
@@ -210,7 +216,71 @@ def optimal_lineup(roster: list[dict], slot_counts: dict[int, int]) -> dict:
         "changes": changes,
         "projected_total_current": round(current_total, 2),
         "projected_total_optimal": round(optimal_total, 2),
+        "_assignment": assignment,
     }
+
+
+def plan_lineup(roster: list[dict], moves: dict[int, int], slot_counts: dict[int, int]) -> list[dict]:
+    """Traduce ``{player_id: slot_id}`` a los items LINEUP de una transacción de ESPN.
+
+    Si un jugador entra en un hueco ya ocupado por otro al que no se mueve, este
+    pasa al hueco que deja libre el primero (o al banquillo si no puede jugar ahí).
+    """
+    by_id = {p["id"]: p for p in roster}
+    final = {p["id"]: p["_slot_id"] for p in roster}
+    for pid, slot in moves.items():
+        p = by_id[pid]
+        if slot not in p.get("_eligible_slot_ids", []):
+            raise EspnError(f"{p['name']} no puede jugar en {SLOTS.get(slot, slot)}.")
+        if slot not in NON_STARTING_SLOTS and not slot_counts.get(slot):
+            raise EspnError(f"Tu liga no tiene hueco {SLOTS.get(slot, slot)} en la alineación.")
+        final[pid] = slot
+
+    for pid, slot in moves.items():
+        if slot in NON_STARTING_SLOTS:
+            continue
+        occupants = [q for q, s in final.items() if s == slot]
+        extra = len(occupants) - slot_counts[slot]
+        if extra <= 0:
+            continue
+        displaced = [q for q in occupants if q not in moves]
+        if len(displaced) != extra:
+            names = ", ".join(by_id[q]["name"] for q in displaced)
+            raise EspnError(
+                f"El hueco {SLOTS[slot]} está lleno: indica a quién sacar de ahí ({names})."
+            )
+        vacated = by_id[pid]["_slot_id"]
+        for q in displaced:
+            final[q] = vacated if vacated in by_id[q].get("_eligible_slot_ids", []) else BENCH_SLOT
+
+    for slot, cap in slot_counts.items():
+        taken = [q for q, s in final.items() if s == slot]
+        if len(taken) > cap:
+            names = ", ".join(by_id[q]["name"] for q in taken)
+            raise EspnError(f"Demasiados jugadores en {SLOTS.get(slot, slot)} ({cap} máx.): {names}.")
+
+    return [
+        {
+            "playerId": pid,
+            "type": "LINEUP",
+            "fromLineupSlotId": by_id[pid]["_slot_id"],
+            "toLineupSlotId": slot,
+        }
+        for pid, slot in final.items()
+        if slot != by_id[pid]["_slot_id"]
+    ]
+
+
+def match_player(players: list[dict], query: str) -> dict:
+    """Un único jugador por nombre (exacto o parcial, sin distinguir mayúsculas)."""
+    q = query.lower().strip()
+    exact = [p for p in players if (p.get("name") or "").lower() == q]
+    found = exact or [p for p in players if q in (p.get("name") or "").lower()]
+    if not found:
+        raise EspnError(f"No encuentro a '{query}'.")
+    if len(found) > 1:
+        raise EspnError(f"'{query}' es ambiguo: {', '.join(p['name'] for p in found)}.")
+    return found[0]
 
 
 def public(p: dict) -> dict:
@@ -221,6 +291,13 @@ def public(p: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+
+def _error_message(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    msgs = [d.get("message") for d in data.get("details", []) if isinstance(d, dict)]
+    msgs += [m for m in data.get("messages", []) if isinstance(m, str)]
+    return "; ".join(m for m in msgs if m) or None
 
 class EspnClient:
     def __init__(self, config: Config, http: httpx.Client | None = None):
@@ -262,6 +339,41 @@ class EspnClient:
         except ValueError as e:
             # ESPN devuelve una página HTML de login cuando las cookies no son válidas
             raise EspnError("Respuesta no válida de ESPN; revisa ESPN_S2/ESPN_SWID.") from e
+
+    def submit_transaction(self, team_id: int, week: int, tx_type: str, items: list[dict],
+                           bid: int | None = None) -> dict:
+        """Envía una transacción (ROSTER, FREEAGENT, WAIVER) de tu equipo a ESPN."""
+        c = self.config
+        if not (c.espn_s2 and c.swid):
+            raise EspnError("Para hacer cambios en ESPN hacen falta ESPN_S2 y ESPN_SWID.")
+        payload: dict[str, Any] = {
+            "isLeagueManager": False,
+            "teamId": team_id,
+            "type": tx_type,
+            "memberId": c.swid if c.swid.startswith("{") else "{" + c.swid + "}",
+            "scoringPeriodId": week,
+            "executionType": "EXECUTE",
+            "items": items,
+        }
+        if bid is not None:
+            payload["bidAmount"] = bid
+        url = f"{WRITE_URL}/seasons/{c.season}/segments/0/leagues/{c.league_id}/transactions/"
+        try:
+            resp = self.http.post(url, json=payload, headers={"Accept": "application/json"})
+        except httpx.HTTPError as e:
+            raise EspnError(f"No se pudo conectar con ESPN: {e}") from e
+        try:
+            data = resp.json()
+        except ValueError:
+            data = None
+        if resp.status_code in (401, 403):
+            raise EspnError("ESPN no autorizó el cambio: revisa ESPN_S2/ESPN_SWID (quizá han caducado).")
+        if resp.is_error:
+            detail = _error_message(data) or resp.text[:300]
+            raise EspnError(f"ESPN rechazó el cambio (HTTP {resp.status_code}): {detail}")
+        if data is None:
+            raise EspnError("Respuesta no válida de ESPN; revisa ESPN_S2/ESPN_SWID.")
+        return data
 
     def league(self, *views: str, **params: Any) -> dict:
         return self._get(self.league_url, list(views), params)
@@ -311,6 +423,20 @@ class EspnClient:
             self._player_names = {p["id"]: p.get("fullName") for p in data}
         return self._player_names
 
+    def _stats_filter(self, week: int) -> dict:
+        return {
+            "value": 2,
+            "additionalValue": [f"00{self.config.season}", f"10{self.config.season}",
+                                f"11{self.config.season}{week}"],
+        }
+
+    def players_by_id(self, ids: list[int], week: int) -> list[dict]:
+        """Entradas de jugadores con su estado en la liga (FREEAGENT, WAIVERS u ONTEAM)."""
+        players_filter = {"filterIds": {"value": ids}, "filterStatsForTopScoringPeriodIds": self._stats_filter(week)}
+        data = self._get(self.league_url, ["kona_player_info"], {"scoringPeriodId": week},
+                         fantasy_filter={"players": players_filter})
+        return data.get("players", [])
+
     def free_agents(self, week: int, slot_id: int | None, limit: int, statuses: list[str]) -> list[dict]:
         players_filter: dict[str, Any] = {
             "filterStatus": {"value": statuses},
@@ -318,11 +444,7 @@ class EspnClient:
             "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
             "sortDraftRanks": {"sortPriority": 100, "sortAsc": True, "value": "STANDARD"},
             "filterRanksForScoringPeriodIds": {"value": [week]},
-            "filterStatsForTopScoringPeriodIds": {
-                "value": 2,
-                "additionalValue": [f"00{self.config.season}", f"10{self.config.season}",
-                                    f"11{self.config.season}{week}"],
-            },
+            "filterStatsForTopScoringPeriodIds": self._stats_filter(week),
         }
         if slot_id is not None:
             players_filter["filterSlotIds"] = {"value": [slot_id]}

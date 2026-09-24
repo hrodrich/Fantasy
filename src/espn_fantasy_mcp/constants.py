@@ -13,6 +13,8 @@ SLOTS = {
 BENCH_SLOT = 20
 IR_SLOT = 21
 NON_STARTING_SLOTS = {BENCH_SLOT, IR_SLOT}
+# Nombre de slot -> ID, para las herramientas que cambian la alineación
+SLOT_IDS = {v: k for k, v in SLOTS.items()} | {"DST": 16, "BENCH": BENCH_SLOT}
 
 # Slot usado para filtrar agentes libres por posición
 POSITION_FILTER_SLOTS = {

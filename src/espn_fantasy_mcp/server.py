@@ -6,28 +6,33 @@ from functools import lru_cache
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from .client import (
     Config,
     EspnClient,
     EspnError,
+    match_player,
     optimal_lineup,
     parse_matchups,
     parse_player,
     parse_roster,
     parse_standings,
+    plan_lineup,
     public,
     starting_slot_counts,
     team_name,
 )
-from .constants import POSITION_FILTER_SLOTS, SLOTS
+from .constants import BENCH_SLOT, NON_STARTING_SLOTS, POSITION_FILTER_SLOTS, SLOT_IDS, SLOTS
 
 mcp = MCPServer(
     name="espn-fantasy",
     instructions=(
-        "Herramientas de solo lectura para una liga de ESPN Fantasy Football (NFL). "
+        "Herramientas para una liga de ESPN Fantasy Football (NFL). "
         "Si no se indica equipo se usa el del usuario (ESPN_TEAM_ID o ESPN_SWID). "
-        "Las semanas son scoringPeriodId de ESPN (1-18)."
+        "Las semanas son scoringPeriodId de ESPN (1-18). "
+        "set_lineup y add_drop modifican tu equipo en ESPN: llámalas primero sin confirm, "
+        "enseña el resultado al usuario y repite con confirm=true solo si lo aprueba."
     ),
 )
 
@@ -101,7 +106,7 @@ def get_matchups(week: int | None = None) -> dict[str, Any]:
 def suggest_lineup(team: str | None = None, week: int | None = None) -> dict[str, Any]:
     """Alineación óptima según las proyecciones de ESPN y los cambios respecto a la actual.
 
-    No modifica nada en ESPN: aplica los cambios en la app.
+    No modifica nada en ESPN: para aplicarla usa set_lineup sin moves.
     """
     c = client()
     wk = _week(c, week)
@@ -109,7 +114,107 @@ def suggest_lineup(team: str | None = None, week: int | None = None) -> dict[str
     t = c.resolve_team(data, team)
     roster = parse_roster(t, week=wk, season=c.config.season)
     result = optimal_lineup(roster, starting_slot_counts(data.get("settings", {})))
-    return {"team": team_name(t), "week": wk, **result}
+    return {"team": team_name(t), "week": wk, **public(result)}
+
+
+WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False)
+
+
+def _my_team(c: EspnClient, data: dict) -> dict:
+    if c.my_team_id(data) is None:
+        raise EspnError("No sé cuál es tu equipo: configura ESPN_TEAM_ID o ESPN_SWID.")
+    return c.resolve_team(data, None)
+
+
+@mcp.tool(annotations=WRITE)
+def set_lineup(moves: dict[str, str] | None = None, week: int | None = None,
+               confirm: bool = False) -> dict[str, Any]:
+    """Cambia la alineación de TU equipo en ESPN.
+
+    moves: {jugador: slot}, p. ej. {"Deshaun Watson": "QB", "Caleb Williams": "BE"}.
+    Slots: QB, RB, WR, TE, FLEX, WR/TE, RB/WR, OP, D/ST, K, BE (banquillo), IR.
+    Si alguien entra en un hueco ocupado, el que estaba pasa al hueco que queda libre.
+    Sin moves aplica la alineación óptima de suggest_lineup.
+    confirm: false = solo muestra los cambios; true = los envía a ESPN. Pide permiso
+    al usuario antes de usar true.
+    """
+    c = client()
+    wk = _week(c, week)
+    data = c.league("mTeam", "mRoster", "mSettings", scoringPeriodId=wk)
+    t = _my_team(c, data)
+    roster = parse_roster(t, week=wk, season=c.config.season)
+    counts = starting_slot_counts(data.get("settings", {}))
+
+    if moves:
+        target = {}
+        for name, slot in moves.items():
+            slot_id = SLOT_IDS.get(slot.upper().replace(" ", ""))
+            if slot_id is None:
+                raise EspnError(f"Slot '{slot}' no válido. Usa: QB, RB, WR, TE, FLEX, WR/TE, OP, D/ST, K, BE, IR.")
+            target[match_player(roster, name)["id"]] = slot_id
+        items = plan_lineup(roster, target, counts)
+    else:
+        assignment = optimal_lineup(roster, counts)["_assignment"]
+        starters = {p["id"] for p in roster if p["_slot_id"] not in NON_STARTING_SLOTS}
+        # Cambio mínimo: solo quien entra y quien sale; si no encaja, reordena todo
+        minimal = {pid: s for pid, s in assignment.items() if pid not in starters}
+        minimal |= {pid: BENCH_SLOT for pid in starters if pid not in assignment}
+        try:
+            items = plan_lineup(roster, minimal, counts)
+        except EspnError:
+            full = assignment | {pid: BENCH_SLOT for pid in starters if pid not in assignment}
+            items = plan_lineup(roster, full, counts)
+
+    names = {p["id"]: p["name"] for p in roster}
+    changes = [
+        {"player": names[i["playerId"]], "from": SLOTS.get(i["fromLineupSlotId"]),
+         "to": SLOTS.get(i["toLineupSlotId"])}
+        for i in items
+    ]
+    out: dict[str, Any] = {"team": team_name(t), "week": wk, "changes": changes}
+    if not items:
+        return {**out, "status": "sin cambios"}
+    if not confirm:
+        return {**out, "status": "pendiente de confirmar (repite con confirm=true)"}
+    c.submit_transaction(t["id"], wk, "ROSTER", items)
+    return {**out, "status": "aplicado en ESPN"}
+
+
+@mcp.tool(annotations=WRITE)
+def add_drop(add: str, drop: str | None = None, bid: int = 0, week: int | None = None,
+             confirm: bool = False) -> dict[str, Any]:
+    """Ficha un agente libre (o reclama uno en waivers) para TU equipo y, opcionalmente, suelta a otro.
+
+    add: nombre del jugador libre. drop: jugador de tu plantilla a soltar (necesario si
+    la plantilla está llena). bid: puja FAAB, solo para waivers.
+    confirm: false = solo muestra la operación; true = la envía a ESPN. Pide permiso
+    al usuario antes de usar true: soltar a un jugador puede no tener vuelta atrás.
+    """
+    c = client()
+    wk = _week(c, week)
+    data = c.league("mTeam", "mRoster", scoringPeriodId=wk)
+    t = _my_team(c, data)
+    wanted = match_player([{"id": i, "name": n} for i, n in c.player_names().items()], add)
+    [entry] = c.players_by_id([wanted["id"]], wk) or [None]
+    if entry is None or entry.get("status") not in ("FREEAGENT", "WAIVERS"):
+        owner = next((team_name(x) for x in data.get("teams", []) if entry and x["id"] == entry.get("onTeamId")), None)
+        raise EspnError(f"{wanted['name']} no está libre" + (f": juega en {owner}." if owner else "."))
+    new = {**parse_player(entry["player"], week=wk, season=c.config.season), "status": entry["status"]}
+    items = [{"playerId": new["id"], "type": "ADD", "toTeamId": t["id"]}]
+    out: dict[str, Any] = {
+        "team": team_name(t),
+        "add": {k: new[k] for k in ("name", "position", "pro_team", "injury_status", "projected_points", "status")},
+    }
+    if drop:
+        old = match_player(parse_roster(t, week=wk, season=c.config.season), drop)
+        items.append({"playerId": old["id"], "type": "DROP", "fromTeamId": t["id"]})
+        out["drop"] = {k: old[k] for k in ("name", "position", "pro_team", "projected_points")}
+    waiver = new["status"] == "WAIVERS"
+    out["type"] = "waiver (se procesa cuando ESPN resuelva los waivers)" if waiver else "agente libre (inmediato)"
+    if not confirm:
+        return {**out, "status": "pendiente de confirmar (repite con confirm=true)"}
+    c.submit_transaction(t["id"], wk, "WAIVER" if waiver else "FREEAGENT", items, bid=bid if waiver else None)
+    return {**out, "status": "reclamación enviada" if waiver else "aplicado en ESPN"}
 
 
 @mcp.tool()

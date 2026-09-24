@@ -11,6 +11,7 @@ from espn_fantasy_mcp.client import (
     parse_matchups,
     parse_roster,
     parse_standings,
+    plan_lineup,
     starting_slot_counts,
 )
 
@@ -138,3 +139,65 @@ def test_config_from_env(monkeypatch):
     monkeypatch.setenv("ESPN_LEAGUE_ID", "")
     with pytest.raises(EspnError):
         Config.from_env()
+
+
+def test_optimal_lineup_assignment():
+    roster = parse_roster(TEAM, week=WEEK, season=SEASON)
+    res = optimal_lineup(roster, starting_slot_counts(SETTINGS))
+    assert res["_assignment"] == {10: QB, 21: RB, 30: WR, 40: TE, 31: FLEX}
+
+
+def test_plan_lineup_swaps_displaced_player():
+    roster = parse_roster(TEAM, week=WEEK, season=SEASON)
+    items = plan_lineup(roster, {21: RB}, starting_slot_counts(SETTINGS))
+    assert sorted((i["playerId"], i["fromLineupSlotId"], i["toLineupSlotId"]) for i in items) == [
+        (20, RB, BE), (21, BE, RB),
+    ]
+    assert all(i["type"] == "LINEUP" for i in items)
+
+
+def test_plan_lineup_swaps_into_vacated_starting_slot():
+    roster = parse_roster(TEAM, week=WEEK, season=SEASON)
+    # WR Dos (FLEX) pasa a WR: WR Uno ocupa el FLEX que queda libre
+    items = plan_lineup(roster, {31: WR}, starting_slot_counts(SETTINGS))
+    assert sorted((i["playerId"], i["toLineupSlotId"]) for i in items) == [(30, FLEX), (31, WR)]
+
+
+def test_plan_lineup_validates():
+    roster = parse_roster(TEAM, week=WEEK, season=SEASON)
+    counts = starting_slot_counts(SETTINGS)
+    with pytest.raises(EspnError, match="no puede jugar"):
+        plan_lineup(roster, {10: RB}, counts)
+    with pytest.raises(EspnError, match="no tiene hueco"):
+        plan_lineup(roster, {21: 3}, counts)
+    assert plan_lineup(roster, {10: QB}, counts) == []
+
+
+def test_submit_transaction_payload():
+    seen = {}
+
+    def handler(req):
+        seen["url"] = req.url
+        seen["method"] = req.method
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"id": "tx"})
+
+    c = make_client(handler, espn_s2="S2", swid="ABC-123")
+    items = [{"playerId": 1, "type": "ADD", "toTeamId": 2}]
+    assert c.submit_transaction(2, WEEK, "FREEAGENT", items) == {"id": "tx"}
+    assert seen["method"] == "POST" and seen["url"].host == "lm-api-writes.fantasy.espn.com"
+    assert seen["url"].path == f"/apis/v3/games/ffl/seasons/{SEASON}/segments/0/leagues/123/transactions/"
+    assert seen["body"] == {
+        "isLeagueManager": False, "teamId": 2, "type": "FREEAGENT", "memberId": "{ABC-123}",
+        "scoringPeriodId": WEEK, "executionType": "EXECUTE", "items": items,
+    }
+
+
+def test_submit_transaction_errors():
+    c = make_client(lambda req: httpx.Response(200))
+    with pytest.raises(EspnError, match="ESPN_S2"):
+        c.submit_transaction(1, WEEK, "ROSTER", [])
+    c = make_client(lambda req: httpx.Response(409, json={"details": [{"message": "Player is locked"}]}),
+                    espn_s2="S2", swid="X")
+    with pytest.raises(EspnError, match="Player is locked"):
+        c.submit_transaction(1, WEEK, "ROSTER", [])
