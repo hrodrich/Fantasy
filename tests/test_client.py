@@ -7,6 +7,7 @@ from espn_fantasy_mcp.client import (
     Config,
     EspnClient,
     EspnError,
+    load_env_file,
     optimal_lineup,
     parse_matchups,
     parse_roster,
@@ -201,3 +202,16 @@ def test_submit_transaction_errors():
                     espn_s2="S2", swid="X")
     with pytest.raises(EspnError, match="Player is locked"):
         c.submit_transaction(1, WEEK, "ROSTER", [])
+
+
+def test_load_env_file_does_not_override(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("# comentario\nESPN_LEAGUE_ID=111\nESPN_S2='abc'\nESPN_TEAM_ID=7\n")
+    monkeypatch.setenv("ESPN_LEAGUE_ID", "")
+    monkeypatch.delenv("ESPN_S2", raising=False)
+    monkeypatch.setenv("ESPN_TEAM_ID", "3")
+    load_env_file(env)
+    import os
+    assert os.environ["ESPN_LEAGUE_ID"] == "111" and os.environ["ESPN_S2"] == "abc"
+    assert os.environ["ESPN_TEAM_ID"] == "3"
+    load_env_file(tmp_path / "no-existe")

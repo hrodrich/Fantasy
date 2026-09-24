@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -35,6 +36,19 @@ WRITE_URL = "https://lm-api-writes.fantasy.espn.com/apis/v3/games/ffl"
 
 class EspnError(ToolError):
     """Error cuyo mensaje se muestra tal cual al modelo."""
+
+
+def load_env_file(path: Path) -> None:
+    """Carga ``CLAVE=valor`` de un .env sin pisar variables ya definidas con valor."""
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not key or key.startswith("#"):
+            continue
+        if not os.environ.get(key, "").strip():
+            os.environ[key] = value.strip().strip("'\"")
 
 
 @dataclass

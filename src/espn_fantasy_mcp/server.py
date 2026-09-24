@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -12,6 +13,7 @@ from .client import (
     Config,
     EspnClient,
     EspnError,
+    load_env_file,
     match_player,
     optimal_lineup,
     parse_matchups,
@@ -39,6 +41,9 @@ mcp = MCPServer(
 
 @lru_cache(maxsize=1)
 def client() -> EspnClient:
+    # .env local (ignorado por git) en la carpeta del proyecto o en el directorio actual
+    for env in (Path(__file__).resolve().parents[2] / ".env", Path.cwd() / ".env"):
+        load_env_file(env)
     return EspnClient(Config.from_env())
 
 
@@ -255,9 +260,10 @@ def find_player(name: str, week: int | None = None) -> list[dict[str, Any]]:
             if q in (p["name"] or "").lower():
                 found.append({**public(p), "fantasy_team": team_name(t)})
     if not found:
-        for p in c.free_agents(wk, None, 500, ["FREEAGENT", "WAIVERS"]):
-            player = parse_player(p["player"], week=wk, season=c.config.season)
-            if q in (player["name"] or "").lower():
+        ids = [i for i, n in c.player_names().items() if q in (n or "").lower()][:25]
+        for p in c.players_by_id(ids, wk) if ids else []:
+            if p.get("status") in ("FREEAGENT", "WAIVERS"):
+                player = parse_player(p["player"], week=wk, season=c.config.season)
                 found.append({**public(player), "fantasy_team": None, "status": p.get("status")})
     return found
 
