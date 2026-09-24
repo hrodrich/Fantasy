@@ -355,8 +355,8 @@ class EspnClient:
             raise EspnError("Respuesta no válida de ESPN; revisa ESPN_S2/ESPN_SWID.") from e
 
     def submit_transaction(self, team_id: int, week: int, tx_type: str, items: list[dict],
-                           bid: int | None = None) -> dict:
-        """Envía una transacción (ROSTER, FREEAGENT, WAIVER) de tu equipo a ESPN."""
+                           bid: int | None = None, extra: dict | None = None) -> dict:
+        """Envía una transacción (ROSTER, FREEAGENT, WAIVER, TRADE_PROPOSAL) de tu equipo a ESPN."""
         c = self.config
         if not (c.espn_s2 and c.swid):
             raise EspnError("Para hacer cambios en ESPN hacen falta ESPN_S2 y ESPN_SWID.")
@@ -371,6 +371,7 @@ class EspnClient:
         }
         if bid is not None:
             payload["bidAmount"] = bid
+        payload |= extra or {}
         url = f"{WRITE_URL}/seasons/{c.season}/segments/0/leagues/{c.league_id}/transactions/"
         try:
             resp = self.http.post(url, json=payload, headers={"Accept": "application/json"})

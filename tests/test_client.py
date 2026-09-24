@@ -194,6 +194,20 @@ def test_submit_transaction_payload():
     }
 
 
+def test_submit_transaction_extra_fields():
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={})
+
+    c = make_client(handler, espn_s2="S2", swid="ABC-123")
+    items = [{"playerId": 1, "type": "TRADE", "fromTeamId": 1, "toTeamId": 2}]
+    c.submit_transaction(1, WEEK, "TRADE_PROPOSAL", items, extra={"comment": "hola", "expirationDate": 5})
+    assert seen["body"]["type"] == "TRADE_PROPOSAL"
+    assert seen["body"]["comment"] == "hola" and seen["body"]["expirationDate"] == 5
+
+
 def test_submit_transaction_errors():
     c = make_client(lambda req: httpx.Response(200))
     with pytest.raises(EspnError, match="ESPN_S2"):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ mcp = MCPServer(
         "Herramientas para una liga de ESPN Fantasy Football (NFL). "
         "Si no se indica equipo se usa el del usuario (ESPN_TEAM_ID o ESPN_SWID). "
         "Las semanas son scoringPeriodId de ESPN (1-18). "
-        "set_lineup y add_drop modifican tu equipo en ESPN: llámalas primero sin confirm, "
+        "set_lineup, add_drop y propose_trade modifican tu equipo en ESPN: llámalas primero sin confirm, "
         "enseña el resultado al usuario y repite con confirm=true solo si lo aprueba."
     ),
 )
@@ -220,6 +221,47 @@ def add_drop(add: str, drop: str | None = None, bid: int = 0, week: int | None =
         return {**out, "status": "pendiente de confirmar (repite con confirm=true)"}
     c.submit_transaction(t["id"], wk, "WAIVER" if waiver else "FREEAGENT", items, bid=bid if waiver else None)
     return {**out, "status": "reclamación enviada" if waiver else "aplicado en ESPN"}
+
+
+@mcp.tool(annotations=WRITE)
+def propose_trade(team: str, give: list[str], receive: list[str], comment: str = "",
+                  expires_in_days: int = 2, confirm: bool = False) -> dict[str, Any]:
+    """Propone un traspaso desde TU equipo a otro equipo de la liga.
+
+    team: equipo rival (ID, nombre o abreviatura). give: jugadores tuyos que ofreces.
+    receive: jugadores suyos que pides. comment: mensaje opcional para el rival.
+    El traspaso solo se ejecuta si el otro equipo lo acepta en ESPN.
+    confirm: false = solo muestra la propuesta; true = la envía a ESPN. Pide permiso
+    al usuario antes de usar true.
+    """
+    c = client()
+    wk = c.current_week()
+    data = c.league("mTeam", "mRoster", scoringPeriodId=wk)
+    mine = _my_team(c, data)
+    other = c.resolve_team(data, team)
+    if other["id"] == mine["id"]:
+        raise EspnError("No puedes proponerte un traspaso a ti mismo.")
+    if not give and not receive:
+        raise EspnError("Indica al menos un jugador en give o receive.")
+    my_roster = parse_roster(mine, week=wk, season=c.config.season)
+    their_roster = parse_roster(other, week=wk, season=c.config.season)
+    gave = [match_player(my_roster, n) for n in give]
+    got = [match_player(their_roster, n) for n in receive]
+    items = [{"playerId": p["id"], "type": "TRADE", "fromTeamId": mine["id"], "toTeamId": other["id"]} for p in gave]
+    items += [{"playerId": p["id"], "type": "TRADE", "fromTeamId": other["id"], "toTeamId": mine["id"]} for p in got]
+
+    def summary(players: list[dict]) -> list[dict]:
+        return [{k: p[k] for k in ("name", "position", "pro_team", "injury_status", "season_projected_points")}
+                for p in players]
+
+    out: dict[str, Any] = {"team": team_name(mine), "to": team_name(other),
+                           "give": summary(gave), "receive": summary(got)}
+    if not confirm:
+        return {**out, "status": "pendiente de confirmar (repite con confirm=true)"}
+    expires = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=max(1, expires_in_days))
+    c.submit_transaction(mine["id"], wk, "TRADE_PROPOSAL", items,
+                         extra={"comment": comment, "expirationDate": int(expires.timestamp() * 1000)})
+    return {**out, "status": "propuesta enviada (pendiente de que el rival la acepte)"}
 
 
 @mcp.tool()
