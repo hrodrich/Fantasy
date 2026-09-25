@@ -18,6 +18,7 @@ cambiar la alineación y fichar/soltar jugadores de **tu** equipo (nunca de otro
 | `get_recent_transactions` | Fichajes, waivers y traspasos de la semana |
 | `set_lineup` ✏️ | Cambia tu alineación (movimientos concretos o la óptima de `suggest_lineup`) |
 | `add_drop` ✏️ | Ficha un agente libre o reclama un waiver y, opcionalmente, suelta a un jugador |
+| `propose_trade` ✏️ | Propone un traspaso a otro equipo (solo se ejecuta si el rival lo acepta) |
 
 Las herramientas ✏️ necesitan `ESPN_S2` y `ESPN_SWID` (aunque la liga sea pública). Sin
 `confirm=true` solo devuelven una vista previa; Claude debe enseñártela y esperar tu permiso antes
@@ -39,6 +40,17 @@ de enviar el cambio. ESPN rechaza mover a jugadores cuyo partido ya ha empezado.
    export ESPN_SWID='{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}'
    # opcional: ESPN_SEASON=2026, ESPN_TEAM_ID=3 (si no, se detecta tu equipo con el SWID)
    ```
+
+### Renovar las cookies
+
+`SWID` no cambia. `espn_s2` caduca: dura meses, pero se invalida si cierras sesión en ESPN o
+cambias la contraseña. Si una herramienta responde "ESPN no autorizó el cambio" o "revisa
+ESPN_S2/ESPN_SWID":
+
+1. Inicia sesión en fantasy.espn.com y copia de nuevo `espn_s2` como en el paso 2.
+2. Sustituye el valor en `.env` y en las variables del entorno de la nube si usas rutinas.
+3. Comprueba que funciona: `uv run python -c "from espn_fantasy_mcp.server import set_lineup; print(set_lineup())"`.
+   Es una vista previa: sin `confirm` no cambia nada, pero lee tu equipo con las cookies.
 
 ## Uso
 
