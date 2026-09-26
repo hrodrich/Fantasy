@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "espn-fantasy": {
+      "command": "uv",
+      "args": ["run", "--quiet", "espn-fantasy-mcp"],
+      "env": {
+        "ESPN_LEAGUE_ID": "${ESPN_LEAGUE_ID:-656936875}",
+        "ESPN_SEASON": "${ESPN_SEASON:-}",
+        "ESPN_S2": "${ESPN_S2:-}",
+        "ESPN_SWID": "${ESPN_SWID:-}",
+        "ESPN_TEAM_ID": "${ESPN_TEAM_ID:-}"
+      }
+    }
+  }
+}
