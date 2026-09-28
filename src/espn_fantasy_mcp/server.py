@@ -266,10 +266,13 @@ def propose_trade(team: str, give: list[str], receive: list[str], comment: str =
 
 @mcp.tool()
 def get_free_agents(position: str | None = None, limit: int = 25, week: int | None = None,
-                    include_waivers: bool = True) -> dict[str, Any]:
-    """Mejores agentes libres (ordenados por % de propiedad) con proyecciones.
+                    include_waivers: bool = True, sort_by: str = "owned") -> dict[str, Any]:
+    """Mejores agentes libres con proyección, puntos de la temporada y de las últimas 3 semanas.
 
     position: QB, RB, WR, TE, FLEX, D/ST o K. Vacío = todas.
+    sort_by: "owned" (% de propiedad), "recent" (media de puntos reales de las últimas
+    3 semanas), "season" (puntos reales de la temporada) o "projected" (proyección de la semana).
+    Con "recent" o "season" aparecen jugadores poco rostereados que están sumando puntos.
     """
     c = client()
     wk = _week(c, week)
@@ -278,15 +281,21 @@ def get_free_agents(position: str | None = None, limit: int = 25, week: int | No
         slot = POSITION_FILTER_SLOTS.get(position.upper().replace(" ", ""))
         if slot is None:
             raise EspnError(f"Posición '{position}' no válida. Usa: {', '.join(POSITION_FILTER_SLOTS)}")
+    sort_keys = {"recent": "recent_avg", "season": "season_points", "projected": "projected_points"}
+    if sort_by != "owned" and sort_by not in sort_keys:
+        raise EspnError(f"sort_by '{sort_by}' no válido. Usa: owned, {', '.join(sort_keys)}")
     statuses = ["FREEAGENT", "WAIVERS"] if include_waivers else ["FREEAGENT"]
-    players = c.free_agents(wk, slot, max(1, min(limit, 100)), statuses)
-    return {
-        "week": wk,
-        "players": [
-            {**public(parse_player(p["player"], week=wk, season=c.config.season)), "status": p.get("status")}
-            for p in players
-        ],
-    }
+    limit = max(1, min(limit, 100))
+    # Para ordenar por rendimiento se trae una bolsa amplia (ESPN la ordena por propiedad)
+    pool = c.free_agents(wk, slot, limit if sort_by == "owned" else 250, statuses)
+    players = [
+        {**public(parse_player(p["player"], week=wk, season=c.config.season)), "status": p.get("status")}
+        for p in pool
+    ]
+    if sort_by in sort_keys:
+        key = sort_keys[sort_by]
+        players.sort(key=lambda p: p.get(key) or 0.0, reverse=True)
+    return {"week": wk, "sort_by": sort_by, "players": players[:limit]}
 
 
 @mcp.tool()

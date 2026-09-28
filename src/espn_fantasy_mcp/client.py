@@ -28,6 +28,7 @@ from .constants import (
     STAT_SOURCE_ACTUAL,
     STAT_SOURCE_PROJECTED,
     STAT_SPLIT_SEASON,
+    STAT_SPLIT_WEEK,
 )
 
 BASE_URL = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl"
@@ -101,8 +102,23 @@ def _stat_total(stats: list[dict], *, period: int, source: int, season: int | No
     return None
 
 
+RECENT_WEEKS = 3
+
+
+def _recent_points(stats: list[dict], *, week: int, season: int) -> dict[int, float]:
+    """Puntos reales por semana en las últimas RECENT_WEEKS semanas ya jugadas."""
+    out = {}
+    for s in stats or []:
+        wk = s.get("scoringPeriodId")
+        if (s.get("statSourceId") == STAT_SOURCE_ACTUAL and s.get("statSplitTypeId") == STAT_SPLIT_WEEK
+                and s.get("seasonId", season) == season and wk and week - RECENT_WEEKS <= wk < week):
+            out[wk] = round(float(s.get("appliedTotal", 0.0)), 2)
+    return dict(sorted(out.items()))
+
+
 def parse_player(player: dict, *, week: int, season: int, lineup_slot: int | None = None) -> dict:
     stats = player.get("stats", [])
+    recent = _recent_points(stats, week=week, season=season)
     out = {
         "id": player.get("id"),
         "name": player.get("fullName"),
@@ -114,6 +130,8 @@ def parse_player(player: dict, *, week: int, season: int, lineup_slot: int | Non
         "points": _stat_total(stats, period=week, source=STAT_SOURCE_ACTUAL),
         "season_points": _stat_total(stats, period=0, source=STAT_SOURCE_ACTUAL, season=season),
         "season_projected_points": _stat_total(stats, period=0, source=STAT_SOURCE_PROJECTED, season=season),
+        "recent_points": recent,
+        "recent_avg": round(sum(recent.values()) / len(recent), 2) if recent else None,
     }
     owned = (player.get("ownership") or {}).get("percentOwned")
     if owned is not None:
@@ -442,7 +460,8 @@ class EspnClient:
         return {
             "value": 2,
             "additionalValue": [f"00{self.config.season}", f"10{self.config.season}",
-                                f"11{self.config.season}{week}"],
+                                f"11{self.config.season}{week}"]
+                               + [f"01{self.config.season}{w}" for w in range(max(1, week - RECENT_WEEKS), week)],
         }
 
     def players_by_id(self, ids: list[int], week: int) -> list[dict]:

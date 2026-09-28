@@ -229,3 +229,23 @@ def test_load_env_file_does_not_override(tmp_path, monkeypatch):
     assert os.environ["ESPN_LEAGUE_ID"] == "111" and os.environ["ESPN_S2"] == "abc"
     assert os.environ["ESPN_TEAM_ID"] == "3"
     load_env_file(tmp_path / "no-existe")
+
+
+def test_recent_points_last_three_weeks():
+    from espn_fantasy_mcp.client import parse_player
+    stats = [
+        {"scoringPeriodId": w, "statSourceId": 0, "statSplitTypeId": 1, "seasonId": SEASON, "appliedTotal": pts}
+        for w, pts in [(1, 2.0), (2, 18.5), (3, 21.0), (4, 30.0), (5, 99.0)]
+    ] + [{"scoringPeriodId": 4, "statSourceId": 1, "statSplitTypeId": 1, "seasonId": SEASON, "appliedTotal": 7.0}]
+    p = parse_player({"id": 1, "fullName": "X", "stats": stats}, week=5, season=SEASON)
+    # Semanas 2-4 (la 5 está en curso y la 1 queda fuera); ignora proyecciones
+    assert p["recent_points"] == {2: 18.5, 3: 21.0, 4: 30.0}
+    assert p["recent_avg"] == 23.17
+    assert parse_player({"id": 2, "stats": []}, week=5, season=SEASON)["recent_avg"] is None
+
+
+def test_stats_filter_requests_recent_weeks():
+    c = make_client(lambda req: httpx.Response(200))
+    ids = c._stats_filter(5)["additionalValue"]
+    assert {f"01{SEASON}2", f"01{SEASON}3", f"01{SEASON}4"} <= set(ids)
+    assert not any(i.startswith("01") for i in c._stats_filter(1)["additionalValue"])
