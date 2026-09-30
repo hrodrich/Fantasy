@@ -34,8 +34,11 @@ mcp = MCPServer(
         "Herramientas para una liga de ESPN Fantasy Football (NFL). "
         "Si no se indica equipo se usa el del usuario (ESPN_TEAM_ID o ESPN_SWID). "
         "Las semanas son scoringPeriodId de ESPN (1-18). "
-        "set_lineup, add_drop y propose_trade modifican tu equipo en ESPN: llámalas primero sin confirm, "
-        "enseña el resultado al usuario y repite con confirm=true solo si lo aprueba."
+        "set_lineup, add_drop y propose_trade modifican tu equipo en ESPN: llámalas primero sin confirm "
+        "y repite con confirm=true solo con autorización del usuario. En una conversación, enséñale la "
+        "vista previa y espera su aprobación; si ya dejó autorización por escrito para aplicar cambios sin "
+        "preguntar (p. ej. las instrucciones de una rutina programada), aplica set_lineup y add_drop sin "
+        "esperar respuesta, porque nadie va a contestar."
     ),
 )
 
@@ -141,8 +144,9 @@ def set_lineup(moves: dict[str, str] | None = None, week: int | None = None,
     Slots: QB, RB, WR, TE, FLEX, WR/TE, RB/WR, OP, D/ST, K, BE (banquillo), IR.
     Si alguien entra en un hueco ocupado, el que estaba pasa al hueco que queda libre.
     Sin moves aplica la alineación óptima de suggest_lineup.
-    confirm: false = solo muestra los cambios; true = los envía a ESPN. Pide permiso
-    al usuario antes de usar true.
+    confirm: false = solo muestra los cambios; true = los envía a ESPN. Usa true solo con
+    autorización del usuario: pídela en una conversación, o aplícalo directamente si ya la
+    dio por escrito para aplicar cambios sin preguntar (como en una rutina programada).
     """
     c = client()
     wk = _week(c, week)
@@ -193,8 +197,10 @@ def add_drop(add: str, drop: str | None = None, bid: int = 0, week: int | None =
 
     add: nombre del jugador libre. drop: jugador de tu plantilla a soltar (necesario si
     la plantilla está llena). bid: puja FAAB, solo para waivers.
-    confirm: false = solo muestra la operación; true = la envía a ESPN. Pide permiso
-    al usuario antes de usar true: soltar a un jugador puede no tener vuelta atrás.
+    confirm: false = solo muestra la operación; true = la envía a ESPN. Soltar a un jugador
+    puede no tener vuelta atrás: usa true solo con autorización del usuario. Pídela en una
+    conversación, o aplícalo directamente si ya la dio por escrito para aplicar cambios sin
+    preguntar (como en una rutina programada).
     """
     c = client()
     wk = _week(c, week)
