@@ -21,8 +21,9 @@ cambiar la alineación y fichar/soltar jugadores de **tu** equipo (nunca de otro
 | `propose_trade` ✏️ | Propone un traspaso a otro equipo (solo se ejecuta si el rival lo acepta) |
 
 Las herramientas ✏️ necesitan `ESPN_S2` y `ESPN_SWID` (aunque la liga sea pública). Sin
-`confirm=true` solo devuelven una vista previa; Claude debe enseñártela y esperar tu permiso antes
-de enviar el cambio. ESPN rechaza mover a jugadores cuyo partido ya ha empezado.
+`confirm=true` solo devuelven una vista previa; en una conversación Claude debe enseñártela y esperar
+tu permiso antes de enviar el cambio. Las rutinas programadas cuyas instrucciones autorizan aplicar
+cambios sin preguntar envían alineaciones y fichajes directamente. ESPN rechaza mover a jugadores cuyo partido ya ha empezado.
 
 ## Configuración
 
