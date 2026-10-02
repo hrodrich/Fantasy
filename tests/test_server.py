@@ -7,7 +7,7 @@ def test_tools_registered():
     tools = {t.name for t in asyncio.run(mcp.list_tools())}
     assert tools == {
         "get_league_info", "get_standings", "get_roster", "get_matchups",
-        "suggest_lineup", "get_free_agents", "find_player", "get_recent_transactions",
+        "suggest_lineup", "get_free_agents", "find_player", "get_recent_transactions", "get_trades",
         "set_lineup", "add_drop", "propose_trade",
     }
 

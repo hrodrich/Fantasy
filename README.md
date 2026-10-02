@@ -16,6 +16,7 @@ cambiar la alineación y fichar/soltar jugadores de **tu** equipo (nunca de otro
 | `get_free_agents` | Mejores agentes libres / waivers por posición |
 | `find_player` | Dónde está un jugador (qué equipo o si está libre) |
 | `get_recent_transactions` | Fichajes, waivers y traspasos de la semana |
+| `get_trades` | Tus propuestas de traspaso y sus respuestas (pendiente, aceptada, rechazada, caducada) |
 | `set_lineup` ✏️ | Cambia tu alineación (movimientos concretos o la óptima de `suggest_lineup`) |
 | `add_drop` ✏️ | Ficha un agente libre o reclama un waiver y, opcionalmente, suelta a un jugador |
 | `propose_trade` ✏️ | Propone un traspaso a otro equipo (solo se ejecuta si el rival lo acepta) |

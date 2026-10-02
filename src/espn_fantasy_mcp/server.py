@@ -21,6 +21,7 @@ from .client import (
     parse_player,
     parse_roster,
     parse_standings,
+    parse_trades,
     plan_lineup,
     public,
     starting_slot_counts,
@@ -353,6 +354,27 @@ def get_recent_transactions(week: int | None = None) -> list[dict[str, Any]]:
             ],
         })
     return sorted(out, key=lambda x: x["date_ms"] or 0, reverse=True)
+
+
+@mcp.tool()
+def get_trades(weeks_back: int = 3, only_mine: bool = True) -> list[dict[str, Any]]:
+    """Propuestas de traspaso y sus respuestas de las últimas semanas, con su estado.
+
+    type TRADE_PROPOSAL con status PENDING = pendiente de respuesta; TRADE_ACCEPT,
+    TRADE_DECLINE, TRADE_VETO, etc. = respuestas (related_id apunta a la propuesta).
+    status CANCELED o EXPIRED = retirada o caducada. only_mine: solo las de tu equipo.
+    """
+    c = client()
+    wk = c.current_week()
+    data = c.league("mTeam", scoringPeriodId=wk)
+    teams = {t["id"]: team_name(t) for t in data.get("teams", [])}
+    my_id = c.my_team_id(data) if only_mine else None
+    if only_mine and my_id is None:
+        raise EspnError("No sé cuál es tu equipo: configura ESPN_TEAM_ID o ESPN_SWID.")
+    transactions = []
+    for w in range(max(1, wk - max(0, weeks_back)), wk + 1):
+        transactions += c.league("mTransactions2", scoringPeriodId=w).get("transactions", [])
+    return parse_trades(transactions, teams=teams, names=c.player_names(), team_id=my_id)
 
 
 def main() -> None:
