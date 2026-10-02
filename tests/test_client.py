@@ -249,3 +249,27 @@ def test_stats_filter_requests_recent_weeks():
     ids = c._stats_filter(5)["additionalValue"]
     assert {f"01{SEASON}2", f"01{SEASON}3", f"01{SEASON}4"} <= set(ids)
     assert not any(i.startswith("01") for i in c._stats_filter(1)["additionalValue"])
+
+
+def test_parse_trades_filters_dedupes_and_sorts():
+    from espn_fantasy_mcp.client import parse_trades
+    teams = {2: "Rodz", 12: "Tepocates", 5: "Otro"}
+    names = {101: "Courtland Sutton", 102: "Kyler Murray"}
+    proposal = {"id": "a", "type": "TRADE_PROPOSAL", "status": "PENDING", "teamId": 2, "proposedDate": 100,
+                "expirationDate": 500, "items": [
+                    {"playerId": 101, "fromTeamId": 2, "toTeamId": 12},
+                    {"playerId": 102, "fromTeamId": 12, "toTeamId": 2}]}
+    decline = {"id": "b", "type": "TRADE_DECLINE", "status": "EXECUTED", "teamId": 12, "proposedDate": 200,
+               "relatedTransactionId": "a", "items": []}
+    other = {"id": "c", "type": "TRADE_PROPOSAL", "status": "PENDING", "teamId": 5, "proposedDate": 300,
+             "items": [{"playerId": 9, "fromTeamId": 5, "toTeamId": 12}]}
+    waiver = {"id": "d", "type": "WAIVER", "status": "EXECUTED", "teamId": 2, "items": []}
+    rows = parse_trades([proposal, decline, other, waiver, proposal], teams=teams, names=names, team_id=2)
+    # La respuesta del rival no lista jugadores, pero entra por apuntar a mi propuesta
+    assert [r["id"] for r in rows] == ["b", "a"]
+    assert rows[1]["items"][0] == {"player": "Courtland Sutton", "from": "Rodz", "to": "Tepocates"}
+    assert rows[1]["teams"] == ["Rodz", "Tepocates"] and rows[1]["expires_ms"] == 500
+    assert rows[0]["proposed_by"] == "Tepocates" and rows[0]["related_id"] == "a"
+    everyone = parse_trades([proposal, decline, other, waiver], teams=teams, names=names)
+    assert [r["id"] for r in everyone] == ["c", "b", "a"]
+    assert everyone[1]["related_id"] == "a"

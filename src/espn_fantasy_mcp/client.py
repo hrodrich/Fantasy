@@ -195,6 +195,47 @@ def parse_matchups(data: dict, matchup_period: int) -> list[dict]:
     ]
 
 
+def parse_trades(transactions: list[dict], *, teams: dict[int, str], names: dict[int, str],
+                 team_id: int | None = None) -> list[dict]:
+    """Propuestas y respuestas de traspaso (tipos TRADE_*), sin duplicados y de la más reciente a la más antigua.
+
+    Si se indica team_id, solo las que involucran a ese equipo.
+    """
+    trades = [tx for tx in transactions if str(tx.get("type", "")).startswith("TRADE")]
+
+    def involved(tx: dict) -> set:
+        return {tx.get("teamId")} | {i.get(k) for i in tx.get("items", []) for k in ("fromTeamId", "toTeamId")}
+
+    # Las respuestas (TRADE_ACCEPT/DECLINE...) no listan jugadores: se incluyen por su propuesta
+    mine = {tx.get("id") for tx in trades if team_id is not None and team_id in involved(tx)}
+    seen, out = set(), []
+    for tx in trades:
+        if tx.get("id") in seen:
+            continue
+        if team_id is not None and tx.get("id") not in mine and tx.get("relatedTransactionId") not in mine:
+            continue
+        seen.add(tx.get("id"))
+        out.append({
+            "id": tx.get("id"),
+            "type": tx.get("type"),
+            "status": tx.get("status"),
+            "proposed_by": teams.get(tx.get("teamId"), tx.get("teamId")),
+            "teams": sorted(teams.get(t, str(t)) for t in involved(tx) if t not in (None, -1)),
+            "related_id": tx.get("relatedTransactionId"),
+            "date_ms": tx.get("proposedDate") or tx.get("processDate"),
+            "expires_ms": tx.get("expirationDate"),
+            "items": [
+                {
+                    "player": names.get(i.get("playerId"), i.get("playerId")),
+                    "from": teams.get(i.get("fromTeamId"), i.get("fromTeamId")),
+                    "to": teams.get(i.get("toTeamId"), i.get("toTeamId")),
+                }
+                for i in tx.get("items", [])
+            ],
+        })
+    return sorted(out, key=lambda t: t["date_ms"] or 0, reverse=True)
+
+
 def starting_slot_counts(settings: dict) -> dict[int, int]:
     counts = ((settings.get("rosterSettings") or {}).get("lineupSlotCounts")) or {}
     return {int(k): v for k, v in counts.items() if v and int(k) not in NON_STARTING_SLOTS}
